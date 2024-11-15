@@ -3,7 +3,10 @@ package gridder
 import (
 	"errors"
 	"image/color"
+	"image/gif"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/fogleman/gg"
 	"golang.org/x/image/font"
@@ -15,8 +18,16 @@ var (
 	errOutOfBounds = errors.New("out of bounds")
 )
 
+type Option func(*Gridder)
+
+func WithGIF(gi *gif.GIF) Option {
+	return func(g *Gridder) {
+		g.animation = gi
+	}
+}
+
 // New creates a new gridder and sets it up with its configuration
-func New(imageConfig ImageConfig, gridConfig GridConfig) (*Gridder, error) {
+func New(imageConfig ImageConfig, gridConfig GridConfig, opts ...Option) (*Gridder, error) {
 	rows := gridConfig.GetRows()
 	if rows == 0 {
 		return nil, errNoRows
@@ -32,6 +43,9 @@ func New(imageConfig ImageConfig, gridConfig GridConfig) (*Gridder, error) {
 		gridConfig:  gridConfig,
 		ctx:         gg.NewContext(imageConfig.GetWidth(), imageConfig.GetHeight()),
 	}
+	for _, opt := range opts {
+		opt(&gridder)
+	}
 	gridder.paintBackground()
 	return &gridder, nil
 }
@@ -41,6 +55,7 @@ type Gridder struct {
 	imageConfig ImageConfig
 	gridConfig  GridConfig
 	ctx         *gg.Context
+	animation   *gif.GIF
 }
 
 // SavePNG saves to PNG
@@ -48,6 +63,17 @@ func (g *Gridder) SavePNG() error {
 	g.paintGrid()
 	g.paintBorder()
 	return g.ctx.SavePNG(g.imageConfig.GetName())
+}
+
+func (g *Gridder) SaveGIF() error {
+	g.paintGrid()
+	g.paintBorder()
+	gifFile, err := os.Create(strings.ReplaceAll(g.imageConfig.GetName(), ".png", ".gif"))
+	if err != nil {
+		return err
+	}
+	defer gifFile.Close()
+	return gif.EncodeAll(gifFile, g.animation)
 }
 
 // EncodePNG encodes the image as a PNG and writes it to the provided io.Writer.
@@ -85,23 +111,24 @@ func (g *Gridder) DrawRectangle(row int, column int, rectangleConfigs ...Rectang
 	x := center.X - rectangleWidth/2
 	y := center.Y - rectangleHeight/2
 
-	g.ctx.Push()
-	dashes := rectangleConfig.GetDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.RotateAbout(gg.Radians(rectangleConfig.GetRotate()), center.X, center.Y)
-	g.ctx.DrawRectangle(x, y, rectangleWidth, rectangleHeight)
-	g.ctx.SetLineWidth(rectangleConfig.GetStrokeWidth())
-	g.ctx.SetColor(rectangleConfig.GetColor())
-	if rectangleConfig.IsStroke() {
-		g.ctx.Stroke()
-	} else {
-		g.ctx.Fill()
-	}
-	g.ctx.Pop()
+	g.scopedCtx(func() {
+		dashes := rectangleConfig.GetDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.RotateAbout(gg.Radians(rectangleConfig.GetRotate()), center.X, center.Y)
+		g.ctx.DrawRectangle(x, y, rectangleWidth, rectangleHeight)
+		g.ctx.SetLineWidth(rectangleConfig.GetStrokeWidth())
+		g.ctx.SetColor(rectangleConfig.GetColor())
+		if rectangleConfig.IsStroke() {
+			g.ctx.Stroke()
+		} else {
+			g.ctx.Fill()
+		}
+	})
+
 	return nil
 }
 
@@ -115,22 +142,22 @@ func (g *Gridder) DrawCircle(row int, column int, circleConfigs ...CircleConfig)
 	center := g.getCellCenter(row, column)
 	circleConfig := getFirstCircleConfig(circleConfigs...)
 
-	g.ctx.Push()
-	dashes := circleConfig.GetDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.DrawPoint(center.X, center.Y, circleConfig.GetRadius())
-	g.ctx.SetLineWidth(circleConfig.GetStrokeWidth())
-	g.ctx.SetColor(circleConfig.GetColor())
-	if circleConfig.IsStroke() {
-		g.ctx.Stroke()
-	} else {
-		g.ctx.Fill()
-	}
-	g.ctx.Pop()
+	g.scopedCtx(func() {
+		dashes := circleConfig.GetDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.DrawPoint(center.X, center.Y, circleConfig.GetRadius())
+		g.ctx.SetLineWidth(circleConfig.GetStrokeWidth())
+		g.ctx.SetColor(circleConfig.GetColor())
+		if circleConfig.IsStroke() {
+			g.ctx.Stroke()
+		} else {
+			g.ctx.Fill()
+		}
+	})
 	return nil
 }
 
@@ -150,18 +177,18 @@ func (g *Gridder) DrawPath(row1 int, column1 int, row2 int, column2 int, pathCon
 	center2 := g.getCellCenter(row2, column2)
 	pathConfig := getFirstPathConfig(pathConfigs...)
 
-	g.ctx.Push()
-	dashes := pathConfig.GetDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.SetColor(pathConfig.GetColor())
-	g.ctx.SetLineWidth(pathConfig.GetStrokeWidth())
-	g.ctx.DrawLine(center1.X, center1.Y, center2.X, center2.Y)
-	g.ctx.Stroke()
-	g.ctx.Pop()
+	g.scopedCtx(func() {
+		dashes := pathConfig.GetDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.SetColor(pathConfig.GetColor())
+		g.ctx.SetLineWidth(pathConfig.GetStrokeWidth())
+		g.ctx.DrawLine(center1.X, center1.Y, center2.X, center2.Y)
+		g.ctx.Stroke()
+	})
 	return nil
 }
 
@@ -180,19 +207,19 @@ func (g *Gridder) DrawLine(row int, column int, lineConfigs ...LineConfig) error
 	x2 := center.X + length/2
 	y := center.Y
 
-	g.ctx.Push()
-	dashes := lineConfig.GetDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.RotateAbout(gg.Radians(lineConfig.GetRotate()), center.X, center.Y)
-	g.ctx.DrawLine(x1, y, x2, y)
-	g.ctx.SetLineWidth(lineConfig.GetStrokeWidth())
-	g.ctx.SetColor(lineConfig.GetColor())
-	g.ctx.Stroke()
-	g.ctx.Pop()
+	g.scopedCtx(func() {
+		dashes := lineConfig.GetDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.RotateAbout(gg.Radians(lineConfig.GetRotate()), center.X, center.Y)
+		g.ctx.DrawLine(x1, y, x2, y)
+		g.ctx.SetLineWidth(lineConfig.GetStrokeWidth())
+		g.ctx.SetColor(lineConfig.GetColor())
+		g.ctx.Stroke()
+	})
 	return nil
 }
 
@@ -205,12 +232,12 @@ func (g *Gridder) DrawString(row int, column int, text string, fontFace font.Fac
 
 	center := g.getCellCenter(row, column)
 	stringConfig := getFirstStringConfig(stringConfigs...)
-	g.ctx.Push()
-	g.ctx.SetFontFace(fontFace)
-	g.ctx.SetColor(stringConfig.GetColor())
-	g.ctx.RotateAbout(gg.Radians(stringConfig.GetRotate()), center.X, center.Y)
-	g.ctx.DrawStringAnchored(text, center.X, center.Y, 0.5, 0.35)
-	g.ctx.Pop()
+	g.scopedCtx(func() {
+		g.ctx.SetFontFace(fontFace)
+		g.ctx.SetColor(stringConfig.GetColor())
+		g.ctx.RotateAbout(gg.Radians(stringConfig.GetRotate()), center.X, center.Y)
+		g.ctx.DrawStringAnchored(text, center.X, center.Y, 0.5, 0.35)
+	})
 	return nil
 }
 
@@ -227,30 +254,30 @@ func (g *Gridder) paintGrid() {
 
 	columns := float64(g.gridConfig.GetColumns())
 
-	g.ctx.Push()
-	for i := 1.0; i < columns; i++ {
-		x := i * cellWidth
-		g.ctx.MoveTo(x, 0)
-		g.ctx.LineTo(x, canvasHeight)
-	}
+	g.scopedCtx(func() {
+		for i := 1.0; i < columns; i++ {
+			x := i * cellWidth
+			g.ctx.MoveTo(x, 0)
+			g.ctx.LineTo(x, canvasHeight)
+		}
 
-	rows := float64(g.gridConfig.GetRows())
-	for i := 1.0; i < rows; i++ {
-		y := i * cellHeight
-		g.ctx.MoveTo(0, y)
-		g.ctx.LineTo(canvasWidth, y)
-	}
+		rows := float64(g.gridConfig.GetRows())
+		for i := 1.0; i < rows; i++ {
+			y := i * cellHeight
+			g.ctx.MoveTo(0, y)
+			g.ctx.LineTo(canvasWidth, y)
+		}
 
-	dashes := g.gridConfig.GetLineDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.SetColor(g.gridConfig.GetLineColor())
-	g.ctx.SetLineWidth(g.gridConfig.GetLineStrokeWidth())
-	g.ctx.Stroke()
-	g.ctx.Pop()
+		dashes := g.gridConfig.GetLineDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.SetColor(g.gridConfig.GetLineColor())
+		g.ctx.SetLineWidth(g.gridConfig.GetLineStrokeWidth())
+		g.ctx.Stroke()
+	})
 }
 
 func (g *Gridder) paintBorder() {
@@ -258,28 +285,28 @@ func (g *Gridder) paintBorder() {
 	cellWidth, cellHeight := g.getCellDimensions()
 
 	columns := float64(g.gridConfig.GetColumns())
-	g.ctx.Push()
-	g.ctx.MoveTo(0, 0)
-	g.ctx.LineTo(0, canvasHeight)
-	g.ctx.MoveTo(cellWidth*columns, 0)
-	g.ctx.LineTo(cellWidth*columns, canvasHeight)
+	g.scopedCtx(func() {
+		g.ctx.MoveTo(0, 0)
+		g.ctx.LineTo(0, canvasHeight)
+		g.ctx.MoveTo(cellWidth*columns, 0)
+		g.ctx.LineTo(cellWidth*columns, canvasHeight)
 
-	rows := float64(g.gridConfig.GetRows())
-	g.ctx.MoveTo(0, 0)
-	g.ctx.LineTo(canvasWidth, 0)
-	g.ctx.MoveTo(0, cellHeight*rows)
-	g.ctx.LineTo(canvasWidth, cellHeight*rows)
+		rows := float64(g.gridConfig.GetRows())
+		g.ctx.MoveTo(0, 0)
+		g.ctx.LineTo(canvasWidth, 0)
+		g.ctx.MoveTo(0, cellHeight*rows)
+		g.ctx.LineTo(canvasWidth, cellHeight*rows)
 
-	dashes := g.gridConfig.GetBorderDashes()
-	if dashes > 0 {
-		g.ctx.SetDash(dashes)
-	} else {
-		g.ctx.SetDash()
-	}
-	g.ctx.SetLineWidth(g.gridConfig.GetBorderStrokeWidth())
-	g.ctx.SetColor(g.gridConfig.GetBorderColor())
-	g.ctx.Stroke()
-	g.ctx.Pop()
+		dashes := g.gridConfig.GetBorderDashes()
+		if dashes > 0 {
+			g.ctx.SetDash(dashes)
+		} else {
+			g.ctx.SetDash()
+		}
+		g.ctx.SetLineWidth(g.gridConfig.GetBorderStrokeWidth())
+		g.ctx.SetColor(g.gridConfig.GetBorderColor())
+		g.ctx.Stroke()
+	})
 }
 
 func (g *Gridder) getCellDimensions() (float64, float64) {
